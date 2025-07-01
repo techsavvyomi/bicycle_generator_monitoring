@@ -32,17 +32,11 @@ class Leaderboard:
         self.student_combo.bind("<<ComboboxSelected>>", lambda e: self.refresh_leaderboard())
 
         # Treeview Table
-        self.columns = ("Student", "Total Energy (kWh)", "Sessions")
-        self.tree = ttk.Treeview(self.top, columns=self.columns, show="headings")
-        self.tree.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 10))
-
-        for col in self.columns:
-            self.tree.heading(col, text=col)
-            self.tree.column(col, anchor=tk.W)
-
+        self.tree = ttk.Treeview(self.top, show="headings")
         self.scrollbar = ttk.Scrollbar(self.top, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=self.scrollbar.set)
         self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 10))
 
     def load_all_students(self):
         """Load all known students from students.csv"""
@@ -82,35 +76,63 @@ class Leaderboard:
             if row.get('Student') == student_name
         ]
 
-        self.tree["columns"] = ["Cycle", "Start", "End", "Duration (s)", "Energy (kWh)"]
-        for col in self.tree["columns"]:
+        # Set dynamic columns
+        columns = ["Cycle", "Start", "End", "Duration (s)", "Energy (kWh)"]
+        self.tree["columns"] = columns
+        for col in columns:
             self.tree.heading(col, text=col)
             self.tree.column(col, anchor=tk.W)
 
+        # Insert session rows
         for row in filtered:
-            start = row['Start'].split(' ')[1]  # HH:MM:SS
-            end = row['End'].split(' ')[1] if row['End'] else ""
+            start = ""
+            end = ""
+            duration = row.get('Duration (s)', '0')
+            energy = row.get('Energy (kWh)', '0.0')
+
+            if row.get('Start'):
+                try:
+                    start = row['Start'].split(" ")[1]  # Extract time part
+                except IndexError:
+                    start = "Invalid Time"
+
+            if row.get('End'):
+                try:
+                    end = row['End'].split(" ")[1]
+                except IndexError:
+                    end = ""
+
             self.tree.insert("", tk.END, values=(
-                row['Cycle'],
+                row.get('Cycle', 'Unknown'),
                 start,
                 end,
-                int(row['Duration (s)']),
-                float(row['Energy (kWh)'])
+                int(duration),
+                float(energy)
             ))
 
     def _refresh_aggregated_view(self):
-        """Show total energy per student, including those with zero"""
+        """Show total energy per student, including those with zero sessions"""
         energy_map = defaultdict(float)
         session_count = defaultdict(int)
 
-        # Count energy and sessions
+        # Aggregate energy and session count
         for row in self.full_data:
-            student = row.get('Student', 'Unknown')
-            energy = float(row.get('Energy (kWh)', 0))
+            student = row.get("Student", "Unknown")
+            try:
+                energy = float(row.get("Energy (kWh)", 0))
+            except ValueError:
+                continue
             energy_map[student] += energy
             session_count[student] += 1
 
-        # Ensure all students appear, even with zero energy
+        # Set dynamic columns
+        columns = ["Student", "Total Energy (kWh)", "Sessions"]
+        self.tree["columns"] = columns
+        for col in columns:
+            self.tree.heading(col, text=col)
+            self.tree.column(col, anchor=tk.W)
+
+        # Add all students
         for student in sorted(self.all_students):
             energy = energy_map.get(student, 0)
             count = session_count.get(student, 0)
@@ -120,12 +142,19 @@ class Leaderboard:
                 count
             ))
 
-        # Optional: sort by energy descending
+        # Optional: sort by kWh descending
         children = self.tree.get_children('')
-        sorted_children = sorted(
-            children,
-            key=lambda child: float(self.tree.item(child)['values'][1]),
-            reverse=True
-        )
-        for index, child in enumerate(sorted_children):
-            self.tree.move(child, '', index)
+        try:
+            sorted_children = sorted(
+                children,
+                key=lambda child: float(self.tree.item(child)['values'][1]),
+                reverse=True
+            )
+            for index, child in enumerate(sorted_children):
+                self.tree.move(child, '', index)
+        except:
+            pass  # Skip sorting if some values can't be parsed
+
+    def show(self):
+        self.top.grab_set()
+        self.top.wait_window()
