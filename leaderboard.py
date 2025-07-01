@@ -1,124 +1,96 @@
-#leaderboard.py
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QTableWidget, QTableWidgetItem, QComboBox, QHeaderView
-from PyQt5.QtGui import QPalette, QLinearGradient, QColor, QBrush, QFont
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
 import pandas as pd
-import warnings
+import os
+from datetime import datetime
 
-class Leaderboard(QDialog):
+
+class Leaderboard:
     def __init__(self):
-        super().__init__()
-        self.setModal(True)
-        self.setWindowTitle("🏆 Leaderboard")
-        self.resize(800, 600)
+        self.top = tk.Toplevel()
+        self.top.title("🏆 Leaderboard")
+        self.top.geometry("800x600")
+        self.top.resizable(True, True)
 
-        # Gradient background
-        grad = QLinearGradient(0, 0, 0, self.height())
-        grad.setColorAt(0, QColor('#e0f7fa'))
-        grad.setColorAt(1, QColor('#80deea'))
-        pal = QPalette()
-        pal.setBrush(QPalette.Window, QBrush(grad))
-        self.setAutoFillBackground(True)
-        self.setPalette(pal)
-
+        # Data
         self.full_data = pd.DataFrame()
 
-        layout = QVBoxLayout(self)
-
-        # Student filter combo
-        self.student_cb = QComboBox()
-        self.student_cb.setFont(QFont('Arial', 14))
-        self.student_cb.addItem("All Students")
-        self.student_cb.currentIndexChanged.connect(self.refresh_leaderboard)
-        layout.addWidget(self.student_cb)
-
-        # Leaderboard table
-        self.table = QTableWidget(0, 5)
-        self.table.setFont(QFont('Arial', 12))
-        self.table.setAlternatingRowColors(True)
-        self.table.setStyleSheet(
-            "QTableWidget { background: rgba(255,255,255,220); }"
-            " QHeaderView::section { background: #004d40; color: white; font-size: 16px; padding: 6px; }"
-            " QTableWidget::item { padding: 8px; }"
-        )
-        layout.addWidget(self.table)
-
+        # UI
+        self.create_widgets()
         self.load_data()
 
+    def create_widgets(self):
+        # Student Filter Combobox
+        self.student_var = tk.StringVar()
+        self.student_combo = ttk.Combobox(self.top, textvariable=self.student_var)
+        self.student_combo.pack(pady=10, padx=20, fill=tk.X)
+        self.student_combo.bind("<<ComboboxSelected>>", lambda e: self.refresh_leaderboard())
+
+        # Treeview Table
+        columns = ("Student", "Total Energy (kWh)", "Sessions")
+        self.tree = ttk.Treeview(self.top, columns=columns, show="headings", selectmode="browse")
+        self.tree.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 10))
+
+        for col in columns:
+            self.tree.heading(col, text=col)
+            self.tree.column(col, anchor=tk.W)
+
+        self.scrollbar = ttk.Scrollbar(self.top, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscroll=self.scrollbar.set)
+        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
     def load_data(self):
-        # Suppress date parsing warnings
-        warnings.filterwarnings('ignore', "Could not infer format*")
         try:
-            df = pd.read_excel("log.xlsx", parse_dates=["Start", "End"])
+            log_path = "session_logs.csv"
+            if not os.path.exists(log_path):
+                messagebox.showinfo("Info", "No session logs found.")
+                return
+
+            self.full_data = pd.read_csv(log_path)
+            self.full_data['Start'] = pd.to_datetime(self.full_data['Start'])
+            self.full_data['End'] = pd.to_datetime(self.full_data['End'])
+
+            students = ["All Students"] + sorted(self.full_data['Student'].dropna().unique().tolist())
+            self.student_combo['values'] = students
+            self.student_combo.current(0)
+
         except Exception as e:
-            print(f"[ERROR] Failed to load leaderboard data: {e}")
+            messagebox.showerror("Error", f"Failed to load leaderboard data:\n{e}")
             self.full_data = pd.DataFrame()
-            self.refresh_leaderboard()
-            return
-
-        df = df.dropna(subset=["Start", "End"])
-        self.full_data = df
-
-        # Populate student combo
-        students = sorted(df['Student'].dropna().unique().tolist())
-        self.student_cb.clear()
-        self.student_cb.addItem("All Students")
-        self.student_cb.addItems(students)
 
         self.refresh_leaderboard()
 
+
     def refresh_leaderboard(self):
-        self.table.clearContents()
-        selected = self.student_cb.currentText()
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        selected = self.student_var.get()
 
         if selected and selected != "All Students":
-            # Detailed sessions view
-            headers = ["Cycle", "Start", "End", "Duration (s)", "Energy (kWh)"]
-            self.table.setColumnCount(len(headers))
-            self.table.setHorizontalHeaderLabels(headers)
-            header = self.table.horizontalHeader()
-            header.setSectionResizeMode(QHeaderView.Stretch)
-            header.setFixedHeight(40)
-
-            records = self.full_data[self.full_data['Student'] == selected].to_dict('records')
-            self.table.setRowCount(len(records))
-            for i, rec in enumerate(records):
-                cycle = rec.get('Cycle', '')
-                start = rec['Start'].strftime('%H:%M:%S')
-                end = rec['End'].strftime('%H:%M:%S')
-                duration = int((rec['End'] - rec['Start']).total_seconds())
-                energy = rec.get('Energy (kWh)', 0.0)
-                values = [cycle, start, end, str(duration), f"{energy:.3f}"]
-                for j, val in enumerate(values):
-                    item = QTableWidgetItem(val)
-                    item.setFont(QFont('Arial', 12))
-                    self.table.setItem(i, j, item)
+            filtered = self.full_data[self.full_data['Student'] == selected]
+            for _, row in filtered.iterrows():
+                values = (
+                    row['Cycle'],
+                    row['Start'].strftime('%H:%M:%S'),
+                    row['End'].strftime('%H:%M:%S'),
+                    int((row['End'] - row['Start']).total_seconds()),
+                    f"{row['Energy (kWh)']:.3f}"
+                )
+                self.tree.insert("", tk.END, values=values)
         else:
-            # Aggregated leaderboard view
-            headers = ["Student", "Total Energy (kWh)", "Sessions"]
-            self.table.setColumnCount(len(headers))
-            self.table.setHorizontalHeaderLabels(headers)
-            header = self.table.horizontalHeader()
-            header.setSectionResizeMode(QHeaderView.Stretch)
-            header.setFixedHeight(40)
-
-            if self.full_data.empty:
-                self.table.setRowCount(0)
-                return
-
             agg = self.full_data.groupby('Student').agg(
-                Sessions=pd.NamedAgg(column='Student', aggfunc='count'),
-                TotalEnergy=pd.NamedAgg(column='Energy (kWh)', aggfunc='sum')
+                Sessions=('Student', 'count'),
+                TotalEnergy=('Energy (kWh)', 'sum')
             ).reset_index().sort_values(by='TotalEnergy', ascending=False)
 
-            self.table.setRowCount(len(agg))
-            for i, row in enumerate(agg.itertuples(index=False)):
-                vals = [row.Student, f"{row.TotalEnergy:.3f}", str(row.Sessions)]
-                for j, val in enumerate(vals):
-                    item = QTableWidgetItem(val)
-                    if j == 0:
-                        item.setFont(QFont('Arial', 12, QFont.Bold))
-                    self.table.setItem(i, j, item)
+            for _, row in agg.iterrows():
+                self.tree.insert("", tk.END, values=(
+                    row['Student'],
+                    f"{row['TotalEnergy']:.3f}",
+                    row['Sessions']
+                ))
 
     def show(self):
-        self.load_data()
-        super().exec_()
+        self.top.grab_set()
+        self.top.wait_window()
