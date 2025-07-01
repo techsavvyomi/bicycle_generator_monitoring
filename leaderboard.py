@@ -1,9 +1,7 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-import pandas as pd
-import os
-from datetime import datetime
-
+from tkinter import ttk, messagebox
+import csv
+from collections import defaultdict
 
 class Leaderboard:
     def __init__(self):
@@ -13,25 +11,32 @@ class Leaderboard:
         self.top.resizable(True, True)
 
         # Data
-        self.full_data = pd.DataFrame()
+        self.full_data = []
+        self.all_students = []
 
-        # UI
+        # Load data and UI
+        self.load_all_students()  # First load all known students
+        self.load_session_data()  # Then load session logs
         self.create_widgets()
-        self.load_data()
+        self.refresh_leaderboard()
 
     def create_widgets(self):
         # Student Filter Combobox
         self.student_var = tk.StringVar()
-        self.student_combo = ttk.Combobox(self.top, textvariable=self.student_var)
+        self.student_combo = ttk.Combobox(
+            self.top,
+            textvariable=self.student_var,
+            values=["All Students"] + self.all_students
+        )
         self.student_combo.pack(pady=10, padx=20, fill=tk.X)
         self.student_combo.bind("<<ComboboxSelected>>", lambda e: self.refresh_leaderboard())
 
         # Treeview Table
-        columns = ("Student", "Total Energy (kWh)", "Sessions")
-        self.tree = ttk.Treeview(self.top, columns=columns, show="headings", selectmode="browse")
+        self.columns = ("Student", "Total Energy (kWh)", "Sessions")
+        self.tree = ttk.Treeview(self.top, columns=self.columns, show="headings")
         self.tree.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 10))
 
-        for col in columns:
+        for col in self.columns:
             self.tree.heading(col, text=col)
             self.tree.column(col, anchor=tk.W)
 
@@ -39,58 +44,88 @@ class Leaderboard:
         self.tree.configure(yscroll=self.scrollbar.set)
         self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-    def load_data(self):
+    def load_all_students(self):
+        """Load all known students from students.csv"""
         try:
-            log_path = "session_logs.csv"
-            if not os.path.exists(log_path):
-                messagebox.showinfo("Info", "No session logs found.")
-                return
-
-            self.full_data = pd.read_csv(log_path)
-            self.full_data['Start'] = pd.to_datetime(self.full_data['Start'])
-            self.full_data['End'] = pd.to_datetime(self.full_data['End'])
-
-            students = ["All Students"] + sorted(self.full_data['Student'].dropna().unique().tolist())
-            self.student_combo['values'] = students
-            self.student_combo.current(0)
-
+            with open("students.csv", newline='', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                self.all_students = [row['Name'] for row in reader]
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load leaderboard data:\n{e}")
-            self.full_data = pd.DataFrame()
+            messagebox.showwarning("No Students", "Could not load student list.")
+            self.all_students = []
 
-        self.refresh_leaderboard()
-
+    def load_session_data(self):
+        """Load session logs from CSV"""
+        try:
+            with open("session_logs.csv", newline='', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                self.full_data = list(reader)
+        except FileNotFoundError:
+            self.full_data = []
 
     def refresh_leaderboard(self):
+        """Update table based on selected student"""
         for item in self.tree.get_children():
             self.tree.delete(item)
 
         selected = self.student_var.get()
 
-        if selected and selected != "All Students":
-            filtered = self.full_data[self.full_data['Student'] == selected]
-            for _, row in filtered.iterrows():
-                values = (
-                    row['Cycle'],
-                    row['Start'].strftime('%H:%M:%S'),
-                    row['End'].strftime('%H:%M:%S'),
-                    int((row['End'] - row['Start']).total_seconds()),
-                    f"{row['Energy (kWh)']:.3f}"
-                )
-                self.tree.insert("", tk.END, values=values)
+        if selected != "All Students":
+            self._refresh_individual_view(selected)
         else:
-            agg = self.full_data.groupby('Student').agg(
-                Sessions=('Student', 'count'),
-                TotalEnergy=('Energy (kWh)', 'sum')
-            ).reset_index().sort_values(by='TotalEnergy', ascending=False)
+            self._refresh_aggregated_view()
 
-            for _, row in agg.iterrows():
-                self.tree.insert("", tk.END, values=(
-                    row['Student'],
-                    f"{row['TotalEnergy']:.3f}",
-                    row['Sessions']
-                ))
+    def _refresh_individual_view(self, student_name):
+        """Show individual session logs for one student"""
+        filtered = [
+            row for row in self.full_data
+            if row.get('Student') == student_name
+        ]
 
-    def show(self):
-        self.top.grab_set()
-        self.top.wait_window()
+        self.tree["columns"] = ["Cycle", "Start", "End", "Duration (s)", "Energy (kWh)"]
+        for col in self.tree["columns"]:
+            self.tree.heading(col, text=col)
+            self.tree.column(col, anchor=tk.W)
+
+        for row in filtered:
+            start = row['Start'].split(' ')[1]  # HH:MM:SS
+            end = row['End'].split(' ')[1] if row['End'] else ""
+            self.tree.insert("", tk.END, values=(
+                row['Cycle'],
+                start,
+                end,
+                int(row['Duration (s)']),
+                float(row['Energy (kWh)'])
+            ))
+
+    def _refresh_aggregated_view(self):
+        """Show total energy per student, including those with zero"""
+        energy_map = defaultdict(float)
+        session_count = defaultdict(int)
+
+        # Count energy and sessions
+        for row in self.full_data:
+            student = row.get('Student', 'Unknown')
+            energy = float(row.get('Energy (kWh)', 0))
+            energy_map[student] += energy
+            session_count[student] += 1
+
+        # Ensure all students appear, even with zero energy
+        for student in sorted(self.all_students):
+            energy = energy_map.get(student, 0)
+            count = session_count.get(student, 0)
+            self.tree.insert("", tk.END, values=(
+                student,
+                f"{energy:.3f}",
+                count
+            ))
+
+        # Optional: sort by energy descending
+        children = self.tree.get_children('')
+        sorted_children = sorted(
+            children,
+            key=lambda child: float(self.tree.item(child)['values'][1]),
+            reverse=True
+        )
+        for index, child in enumerate(sorted_children):
+            self.tree.move(child, '', index)
