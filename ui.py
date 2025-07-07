@@ -118,15 +118,21 @@ class EnergyApp:
         self.root.after(1000, self.update_timer)
 
     def handle_new_data(self, data):
-        for ch in data['channels']:
-            name = ch['channel']
-            voltage = ch['voltage']
-            if name.startswith("C"):
-                index = int(name[1:]) - 1
-                if 0 <= index < 8:
-                    tracker_name = f"Cycle {index + 1}"
-                    self.trackers[tracker_name].update_voltage(voltage)
-        self.update_ui()
+        """Process new data received from ESP32."""
+        try:
+            channels = data.get("channels", [])
+            for ch in channels:
+                channel_num = ch.get("channel")
+                connected = ch.get("connected", False)
+                voltage_mV = ch.get("voltage_mV", 0)
+
+                # Map channel 0–7 to "Cycle 1" through "Cycle 8"
+                if 0 <= channel_num < 8:
+                    tracker_name = f"Cycle {channel_num + 1}"
+                    self.trackers[tracker_name].update_voltage(voltage_mV / 1000)  # Convert mV to V
+            self.update_ui()
+        except Exception as e:
+            print(f"[ERROR] Failed to parse data: {e}")
 
     def load_students(self):
         try:
